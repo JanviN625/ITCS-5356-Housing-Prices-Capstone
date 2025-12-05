@@ -1,0 +1,2 @@
+hidden_layers,activation,learning_rate,n_iterations,train_rmse,test_rmse,train_mae,test_mae,train_r2,test_r2
+"(128, 64)",relu,0.01,76,34873.41672143603,40881.7727164077,22071.953279987352,29542.031929090044,0.7961027879064158,0.7821058328823116
