@@ -33,29 +33,24 @@ IntroMLCapstone/
 1. **Linear Regression** (`linear_regression.py`)
    - Ridge regularization (α=10)
    - Closed-form and gradient descent solutions
-   - Test R² = 0.871
 
 2. **Polynomial Regression** (`polynomial_regression.py`)
    - Degree 3 polynomial features
    - Top 15 feature selection by correlation
-   - Test R² = 0.836
 
 3. **Neural Network** (`neural_network.py`)
    - Multilayer perceptron (260→100→1)
    - ReLU activation, backpropagation
-   - Test R² = 0.865
 
 ### Literature-Based Methods
 4. **XGBoost** (`xgboost_paper.py`)
    - Based on: Phan, T.D. (2024) "An Optimal House Price Prediction Algorithm: XGBoost"
    - Grid search over 81 hyperparameter combinations
-   - Test R² = 0.925 (**Best model**)
 
 5. **Stacking Ensemble** (`stacking_paper.py`)
    - Based on: Truong et al. (2020) "Housing Price Prediction via Improved Machine Learning Techniques"
    - Base models: Random Forest, XGBoost, LightGBM
    - Meta-learner: Ridge regression
-   - Test R² = 0.898
 
 ## Requirements
 ```bash
