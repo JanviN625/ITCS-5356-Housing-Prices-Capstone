@@ -1,321 +1,277 @@
 """
-Linear Regression Model for House Price Prediction
+Linear Regression - House Price Prediction
 Capstone Project - Classical ML Algorithm #1
+
+Implementation using both closed-form solution and gradient descent.
 """
 
 import os
-from typing import Tuple
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Set random seed for reproducibility
 np.random.seed(42)
 
-# ============================================================================
-# Custom Transformers
-# ============================================================================
+# -----------------------------
+# Data Loading
+# -----------------------------
 
-class Standardization(BaseEstimator, TransformerMixin):
-    """Standardize features by removing mean and scaling to unit variance"""
-    def __init__(self):
-        self.mean = None
-        self.std = None
-
-    def fit(self, X: pd.DataFrame, y=None):
-        self.mean = np.mean(X, axis=0)
-        self.std = np.std(X, axis=0)
-        return self
-
-    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        return (X - self.mean) / self.std
-
-class AddBias(BaseEstimator, TransformerMixin):
-    """Add bias term (column of 1s) to feature matrix"""
-    def __init__(self):
-        pass
-
-    def fit(self, X: pd.DataFrame, y=None):
-        return self
-
-    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        X = X.copy()
-        X.insert(0, 'bias', 1)
-        return X
-
-# ============================================================================
-# Data Preprocessing Pipeline
-# ============================================================================
-
-def load_data(filepath='train.csv') -> pd.DataFrame:
+def load_data(filepath='train.csv'):
     """Load the Ames Housing dataset"""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}")
     
     df = pd.read_csv(filepath)
-    print(f"Dataset loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+    print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
     return df
 
-def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean and prepare data before splitting"""
+
+def preprocess_data(df):
+    """Clean and prepare data"""
     df = df.copy()
     
+    # Drop ID column
+    df = df.drop('Id', axis=1, errors='ignore')
+    
     # Separate target
-    if 'SalePrice' in df.columns:
-        target = df['SalePrice']
-        features = df.drop(['SalePrice', 'Id'], axis=1, errors='ignore')
-    else:
-        raise ValueError("SalePrice column not found in dataset")
-    
-    # Handle missing values for categorical features
-    cat_features = features.select_dtypes(include=['object']).columns
-    for col in cat_features:
-        features[col] = features[col].fillna('None')
-    
-    # Handle missing values for numerical features
-    num_features = features.select_dtypes(include=[np.number]).columns
-    for col in num_features:
-        features[col] = features[col].fillna(features[col].median())
-    
-    # One-hot encode categorical variables
-    features_encoded = pd.get_dummies(features, drop_first=True)
-    
-    # Recombine with target
-    df_clean = features_encoded.copy()
-    df_clean['SalePrice'] = target
-    
-    print(f"After preprocessing: {df_clean.shape[0]} rows × {df_clean.shape[1]} columns")
-    print(f"Features: {df_clean.shape[1] - 1}, Target: SalePrice")
-    
-    return df_clean
-
-def feature_label_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
-    """Split features and labels"""
-    X = df.drop(columns=['SalePrice'])
     y = df['SalePrice'].copy()
+    X = df.drop('SalePrice', axis=1)
+    
+    # Handle missing values - numerical features
+    num_cols = X.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        if X[col].isnull().sum() > 0:
+            X[col].fillna(X[col].median(), inplace=True)
+    
+    # Handle missing values - categorical features
+    cat_cols = X.select_dtypes(include=['object']).columns
+    for col in cat_cols:
+        if X[col].isnull().sum() > 0:
+            X[col].fillna('None', inplace=True)
+    
+    # One-hot encoding
+    X = pd.get_dummies(X, drop_first=True)
+    
+    print(f"After preprocessing: {X.shape[1]} features")
+    
     return X, y
 
-def train_valid_test_split(X: pd.DataFrame, y: pd.Series) -> Tuple:
-    """Split data into train, validation, and test sets"""
-    # First split: separate test set (20%)
-    X_temp, X_tst, y_temp, y_tst = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    
-    # Second split: separate validation set (20% of remaining = 16% of total)
-    X_trn, X_vld, y_trn, y_vld = train_test_split(
-        X_temp, y_temp, test_size=0.2, random_state=42
-    )
-    
-    # Reset indices
-    for data in [X_trn, y_trn, X_vld, y_vld, X_tst, y_tst]:
-        data.reset_index(inplace=True, drop=True)
-    
-    print(f"\nData split:")
-    print(f"  Training:   {X_trn.shape[0]} samples ({X_trn.shape[0]/len(X)*100:.1f}%)")
-    print(f"  Validation: {X_vld.shape[0]} samples ({X_vld.shape[0]/len(X)*100:.1f}%)")
-    print(f"  Test:       {X_tst.shape[0]} samples ({X_tst.shape[0]/len(X)*100:.1f}%)")
-    
-    return X_trn, y_trn, X_vld, y_vld, X_tst, y_tst
+# -----------------------------
+# Model Implementation
+# -----------------------------
 
-def apply_feature_pipeline(X_trn: pd.DataFrame, 
-                           X_vld: pd.DataFrame, 
-                           X_tst: pd.DataFrame) -> Tuple:
-    """Apply standardization and bias term to features"""
-    stages = [
-        ('scaler', Standardization()),
-        ('bias', AddBias())
-    ]
+def fit_linear_regression_closed_form(X, y):
+    """
+    Fit linear regression using closed-form solution.
+    theta = (X^T X)^(-1) X^T y
+    """
+    # Add bias term
+    X_bias = np.c_[np.ones(X.shape[0]), X]
     
-    pipeline = Pipeline(stages)
+    # Closed-form solution
+    theta = np.linalg.pinv(X_bias.T @ X_bias) @ X_bias.T @ y
     
-    # Fit on training data only
-    X_trn_scaled = pipeline.fit_transform(X_trn)
-    X_vld_scaled = pipeline.transform(X_vld)
-    X_tst_scaled = pipeline.transform(X_tst)
-    
-    print(f"\nFeature engineering applied:")
-    print(f"  Standardization: μ=0, σ=1")
-    print(f"  Bias term added")
-    print(f"  Final feature count: {X_trn_scaled.shape[1]}")
-    
-    return X_trn_scaled, X_vld_scaled, X_tst_scaled
+    return theta
 
-# ============================================================================
-# Model Training and Evaluation
-# ============================================================================
 
-def train_model(X_trn: pd.DataFrame, y_trn: pd.Series) -> LinearRegression:
-    """Train Linear Regression model"""
-    model = LinearRegression()
-    model.fit(X_trn, y_trn)
+def fit_linear_regression_gd(X, y, lr=0.01, epochs=1000):
+    """
+    Fit linear regression using gradient descent.
+    """
+    # Add bias term
+    X_bias = np.c_[np.ones(X.shape[0]), X]
     
-    print("\nModel trained: Linear Regression")
-    print(f"  Coefficients learned: {X_trn.shape[1]}")
+    # Initialize parameters
+    theta = np.zeros(X_bias.shape[1])
+    m = len(y)
     
-    return model
+    losses = []
+    
+    for epoch in range(epochs):
+        # Predictions
+        preds = X_bias @ theta
+        
+        # Compute loss
+        loss = np.mean((preds - y) ** 2)
+        losses.append(loss)
+        
+        # Gradient
+        gradient = (1/m) * X_bias.T @ (preds - y)
+        
+        # Update parameters
+        theta -= lr * gradient
+        
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch}: Loss = {loss:.2f}")
+    
+    return theta, losses
 
-def evaluate_model(model: LinearRegression, 
-                   X: pd.DataFrame, 
-                   y: pd.Series, 
-                   dataset_name: str) -> dict:
-    """Evaluate model performance"""
-    y_pred = model.predict(X)
-    
-    rmse = np.sqrt(mean_squared_error(y, y_pred))
-    mae = mean_absolute_error(y, y_pred)
-    r2 = r2_score(y, y_pred)
-    
-    print(f"\n{dataset_name} Metrics:")
-    print(f"  RMSE: ${rmse:,.2f}")
-    print(f"  MAE:  ${mae:,.2f}")
-    print(f"  R²:   {r2:.4f}")
+
+def predict_linear(X, theta):
+    """Make predictions using linear regression"""
+    # Add bias term
+    X_bias = np.c_[np.ones(X.shape[0]), X]
+    return X_bias @ theta
+
+
+def evaluate_model(y_true, y_pred):
+    """Calculate evaluation metrics"""
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+    mae = np.mean(np.abs(y_true - y_pred))
     
     return {
+        'mse': mse,
         'rmse': rmse,
-        'mae': mae,
         'r2': r2,
-        'predictions': y_pred
+        'mae': mae
     }
 
-def cross_validate_model(model: LinearRegression, 
-                         X: pd.DataFrame, 
-                         y: pd.Series, 
-                         cv: int = 5):
-    """Perform cross-validation"""
-    cv_scores = cross_val_score(
-        model, X, y, cv=cv, 
-        scoring='neg_mean_squared_error',
-        n_jobs=-1
-    )
-    cv_rmse = np.sqrt(-cv_scores.mean())
-    cv_std = np.sqrt(cv_scores.std())
-    
-    print(f"\nCross-Validation Results ({cv}-fold):")
-    print(f"  Mean RMSE: ${cv_rmse:,.2f}")
-    print(f"  Std Dev:   ${cv_std:,.2f}")
-    
-    return cv_rmse
-
-# ============================================================================
+# -----------------------------
 # Visualization
-# ============================================================================
+# -----------------------------
 
-def plot_results(y_true: pd.Series, 
-                 y_pred: np.ndarray, 
-                 dataset_name: str,
-                 save_path: str = 'linear_regression_results.png'):
-    """Create visualization of model performance"""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+def plot_predictions(y_true, y_pred, title="Linear Regression Results"):
+    """Plot actual vs predicted values"""
+    plt.figure(figsize=(12, 5))
     
-    # Actual vs Predicted
-    axes[0].scatter(y_true, y_pred, alpha=0.5, edgecolors='k', linewidth=0.5)
-    axes[0].plot([y_true.min(), y_true.max()], 
-                 [y_true.min(), y_true.max()], 
-                 'r--', lw=2, label='Perfect Prediction')
-    axes[0].set_xlabel('Actual Price ($)', fontsize=12)
-    axes[0].set_ylabel('Predicted Price ($)', fontsize=12)
-    axes[0].set_title(f'Linear Regression: Actual vs Predicted ({dataset_name})', 
-                     fontsize=13, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    # Subplot 1: Actual vs Predicted
+    plt.subplot(1, 2, 1)
+    plt.scatter(y_true, y_pred, alpha=0.5)
+    plt.plot([y_true.min(), y_true.max()], 
+             [y_true.min(), y_true.max()], 
+             'r--', lw=2)
+    plt.xlabel('Actual Price')
+    plt.ylabel('Predicted Price')
+    plt.title('Actual vs Predicted')
+    plt.grid(True)
     
-    # Residuals
+    # Subplot 2: Residuals
     residuals = y_true - y_pred
-    axes[1].scatter(y_pred, residuals, alpha=0.5, edgecolors='k', linewidth=0.5)
-    axes[1].axhline(y=0, color='r', linestyle='--', lw=2)
-    axes[1].set_xlabel('Predicted Price ($)', fontsize=12)
-    axes[1].set_ylabel('Residuals ($)', fontsize=12)
-    axes[1].set_title('Residual Plot', fontsize=13, fontweight='bold')
-    axes[1].grid(True, alpha=0.3)
+    plt.subplot(1, 2, 2)
+    plt.scatter(y_pred, residuals, alpha=0.5)
+    plt.axhline(y=0, color='r', linestyle='--', lw=2)
+    plt.xlabel('Predicted Price')
+    plt.ylabel('Residuals')
+    plt.title('Residual Plot')
+    plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"\nVisualization saved: {save_path}")
+    plt.savefig('linear_regression_results.png', dpi=300)
+    print("Plot saved: linear_regression_results.png")
     plt.show()
 
-def save_metrics(train_metrics: dict, 
-                 val_metrics: dict, 
-                 test_metrics: dict,
-                 cv_rmse: float,
-                 filepath: str = 'linear_regression_metrics.csv'):
-    """Save metrics to CSV file"""
-    metrics_df = pd.DataFrame({
-        'train_rmse': [train_metrics['rmse']],
-        'train_mae': [train_metrics['mae']],
-        'train_r2': [train_metrics['r2']],
-        'val_rmse': [val_metrics['rmse']],
-        'val_mae': [val_metrics['mae']],
-        'val_r2': [val_metrics['r2']],
-        'test_rmse': [test_metrics['rmse']],
-        'test_mae': [test_metrics['mae']],
-        'test_r2': [test_metrics['r2']],
-        'cv_rmse': [cv_rmse]
-    })
-    
-    metrics_df.to_csv(filepath, index=False)
-    print(f"Metrics saved: {filepath}")
 
-# ============================================================================
+def plot_training_curve(losses):
+    """Plot training loss curve"""
+    plt.figure(figsize=(8, 5))
+    plt.plot(losses)
+    plt.xlabel('Epoch')
+    plt.ylabel('MSE Loss')
+    plt.title('Training Loss Curve')
+    plt.grid(True)
+    plt.savefig('linear_regression_training.png', dpi=300)
+    print("Plot saved: linear_regression_training.png")
+    plt.show()
+
+# -----------------------------
 # Main Pipeline
-# ============================================================================
+# -----------------------------
 
 def main():
-    """Main execution pipeline"""
-    print("="*70)
+    print("="*60)
     print("LINEAR REGRESSION - HOUSE PRICE PREDICTION")
-    print("="*70)
+    print("="*60)
     
-    # Load and preprocess data
-    print("\n[1/6] Loading and preprocessing data...")
+    # Load data
+    print("\n[Step 1] Loading data...")
     df = load_data('train.csv')
-    df_clean = preprocess_data(df)
     
-    # Split features and labels
-    print("\n[2/6] Splitting features and labels...")
-    X, y = feature_label_split(df_clean)
+    # Preprocess
+    print("\n[Step 2] Preprocessing...")
+    X, y = preprocess_data(df)
     
-    # Split into train/validation/test
-    print("\n[3/6] Splitting into train/validation/test sets...")
-    X_trn, y_trn, X_vld, y_vld, X_tst, y_tst = train_valid_test_split(X, y)
-    
-    # Apply feature engineering pipeline
-    print("\n[4/6] Applying feature engineering...")
-    X_trn_scaled, X_vld_scaled, X_tst_scaled = apply_feature_pipeline(
-        X_trn, X_vld, X_tst
+    # Split data
+    print("\n[Step 3] Splitting data...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
     )
+    print(f"Training samples: {len(X_train)}")
+    print(f"Test samples: {len(X_test)}")
     
-    # Train model
-    print("\n[5/6] Training model...")
-    model = train_model(X_trn_scaled, y_trn)
+    # Scale features
+    print("\n[Step 4] Scaling features...")
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
     
-    # Evaluate on all sets
-    print("\n[6/6] Evaluating model...")
-    train_metrics = evaluate_model(model, X_trn_scaled, y_trn, "Training")
-    val_metrics = evaluate_model(model, X_vld_scaled, y_vld, "Validation")
-    test_metrics = evaluate_model(model, X_tst_scaled, y_tst, "Test")
+    # Train model using closed-form solution
+    print("\n[Step 5] Training model (Closed-Form Solution)...")
+    theta = fit_linear_regression_closed_form(X_train_scaled, y_train.values)
+    print(f"Parameters learned: {len(theta)}")
     
-    # Cross-validation
-    cv_rmse = cross_validate_model(model, X_trn_scaled, y_trn)
+    # Make predictions
+    print("\n[Step 6] Making predictions...")
+    y_train_pred = predict_linear(X_train_scaled, theta)
+    y_test_pred = predict_linear(X_test_scaled, theta)
     
-    # Save results
-    print("\n" + "="*70)
-    print("SAVING RESULTS")
-    print("="*70)
-    plot_results(y_tst, test_metrics['predictions'], 'Test Set')
-    save_metrics(train_metrics, val_metrics, test_metrics, cv_rmse)
+    # Evaluate
+    print("\n[Step 7] Evaluating model...")
+    train_metrics = evaluate_model(y_train.values, y_train_pred)
+    test_metrics = evaluate_model(y_test.values, y_test_pred)
     
-    print("\n" + "="*70)
-    print("LINEAR REGRESSION COMPLETED SUCCESSFULLY")
-    print("="*70)
+    print("\nTraining Set:")
+    print(f"  RMSE: ${train_metrics['rmse']:,.2f}")
+    print(f"  MAE:  ${train_metrics['mae']:,.2f}")
+    print(f"  R²:   {train_metrics['r2']:.4f}")
+    
+    print("\nTest Set:")
+    print(f"  RMSE: ${test_metrics['rmse']:,.2f}")
+    print(f"  MAE:  ${test_metrics['mae']:,.2f}")
+    print(f"  R²:   {test_metrics['r2']:.4f}")
+    
+    # Visualize
+    print("\n[Step 8] Creating visualizations...")
+    plot_predictions(y_test.values, y_test_pred)
+    
+    # Optional: Train with gradient descent to show convergence
+    print("\n[Optional] Training with Gradient Descent...")
+    theta_gd, losses = fit_linear_regression_gd(
+        X_train_scaled, y_train.values, lr=0.1, epochs=500
+    )
+    plot_training_curve(losses)
+    
+    # Save metrics
+    print("\n[Step 9] Saving results...")
+    results_df = pd.DataFrame({
+        'Method': ['Closed-Form', 'Gradient Descent'],
+        'Train_RMSE': [train_metrics['rmse'], 
+                       np.sqrt(mean_squared_error(y_train.values, 
+                                                  predict_linear(X_train_scaled, theta_gd)))],
+        'Test_RMSE': [test_metrics['rmse'],
+                      np.sqrt(mean_squared_error(y_test.values,
+                                                 predict_linear(X_test_scaled, theta_gd)))],
+        'Train_R2': [train_metrics['r2'],
+                     r2_score(y_train.values, predict_linear(X_train_scaled, theta_gd))],
+        'Test_R2': [test_metrics['r2'],
+                    r2_score(y_test.values, predict_linear(X_test_scaled, theta_gd))]
+    })
+    results_df.to_csv('linear_regression_metrics.csv', index=False)
+    print("Metrics saved: linear_regression_metrics.csv")
+    
+    print("\n" + "="*60)
+    print("LINEAR REGRESSION COMPLETED")
+    print("="*60)
+
 
 if __name__ == "__main__":
     main()

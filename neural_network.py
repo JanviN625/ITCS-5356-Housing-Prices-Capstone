@@ -1,386 +1,473 @@
 """
-Neural Network Model for House Price Prediction
+Neural Network - House Price Prediction
 Capstone Project - Classical ML Algorithm #3
+
+Manual NumPy implementation of Multi-Layer Perceptron (MLP).
 """
 
 import os
-from typing import Tuple
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.pipeline import Pipeline
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Set random seed
 np.random.seed(42)
 
-# ============================================================================
-# Custom Transformers
-# ============================================================================
+# -----------------------------
+# Data Loading
+# -----------------------------
 
-class Standardization(BaseEstimator, TransformerMixin):
-    """Standardize features by removing mean and scaling to unit variance"""
-    def __init__(self):
-        self.mean = None
-        self.std = None
-
-    def fit(self, X: pd.DataFrame, y=None):
-        self.mean = np.mean(X, axis=0)
-        self.std = np.std(X, axis=0)
-        return self
-
-    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        return (X - self.mean) / self.std
-
-# ============================================================================
-# Data Preprocessing
-# ============================================================================
-
-def load_data(filepath='train.csv') -> pd.DataFrame:
+def load_data(filepath='train.csv'):
     """Load the Ames Housing dataset"""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}")
     
     df = pd.read_csv(filepath)
-    print(f"Dataset loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+    print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
     return df
 
-def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean and prepare data before splitting"""
+
+def preprocess_data(df):
+    """Clean and prepare data"""
     df = df.copy()
     
-    target = df['SalePrice']
-    features = df.drop(['SalePrice', 'Id'], axis=1, errors='ignore')
+    # Drop ID column
+    df = df.drop('Id', axis=1, errors='ignore')
     
-    # Handle missing values
-    cat_features = features.select_dtypes(include=['object']).columns
-    for col in cat_features:
-        features[col] = features[col].fillna('None')
-    
-    num_features = features.select_dtypes(include=[np.number]).columns
-    for col in num_features:
-        features[col] = features[col].fillna(features[col].median())
-    
-    # One-hot encode categorical variables
-    features_encoded = pd.get_dummies(features, drop_first=True)
-    
-    df_clean = features_encoded.copy()
-    df_clean['SalePrice'] = target
-    
-    print(f"After preprocessing: {df_clean.shape[0]} rows × {df_clean.shape[1]} columns")
-    
-    return df_clean
-
-def feature_label_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
-    """Split features and labels"""
-    X = df.drop(columns=['SalePrice'])
+    # Separate target
     y = df['SalePrice'].copy()
+    X = df.drop('SalePrice', axis=1)
+    
+    # Handle missing values - numerical
+    num_cols = X.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        if X[col].isnull().sum() > 0:
+            X[col].fillna(X[col].median(), inplace=True)
+    
+    # Handle missing values - categorical
+    cat_cols = X.select_dtypes(include=['object']).columns
+    for col in cat_cols:
+        if X[col].isnull().sum() > 0:
+            X[col].fillna('None', inplace=True)
+    
+    # One-hot encoding
+    X = pd.get_dummies(X, drop_first=True)
+    
+    print(f"After preprocessing: {X.shape[1]} features")
+    
     return X, y
 
-def train_valid_test_split(X: pd.DataFrame, y: pd.Series) -> Tuple:
-    """Split data into train, validation, and test sets"""
-    X_temp, X_tst, y_temp, y_tst = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    
-    X_trn, X_vld, y_trn, y_vld = train_test_split(
-        X_temp, y_temp, test_size=0.2, random_state=42
-    )
-    
-    # Reset indices
-    for data in [X_trn, y_trn, X_vld, y_vld, X_tst, y_tst]:
-        data.reset_index(inplace=True, drop=True)
-    
-    print(f"\nData split:")
-    print(f"  Training:   {X_trn.shape[0]} samples")
-    print(f"  Validation: {X_vld.shape[0]} samples")
-    print(f"  Test:       {X_tst.shape[0]} samples")
-    
-    return X_trn, y_trn, X_vld, y_vld, X_tst, y_tst
+# -----------------------------
+# Activation Functions
+# -----------------------------
 
-def apply_feature_pipeline(X_trn: pd.DataFrame, 
-                           X_vld: pd.DataFrame, 
-                           X_tst: pd.DataFrame) -> Tuple:
-    """Apply standardization to features"""
-    scaler = Standardization()
-    
-    X_trn_scaled = scaler.fit_transform(X_trn)
-    X_vld_scaled = scaler.transform(X_vld)
-    X_tst_scaled = scaler.transform(X_tst)
-    
-    print(f"\nStandardization applied (μ=0, σ=1)")
-    
-    return X_trn_scaled, X_vld_scaled, X_tst_scaled
+def relu(Z):
+    """ReLU activation function"""
+    return np.maximum(0, Z)
 
-# ============================================================================
+
+def relu_derivative(Z):
+    """Derivative of ReLU"""
+    return (Z > 0).astype(float)
+
+
+def identity(Z):
+    """Identity activation for regression output"""
+    return Z
+
+
+def identity_derivative(Z):
+    """Derivative of identity"""
+    return np.ones_like(Z)
+
+# -----------------------------
+# Neural Network Implementation
+# -----------------------------
+
+def initialize_parameters(layer_dims):
+    """
+    Initialize weights and biases for neural network.
+    
+    Args:
+        layer_dims: list of layer sizes [input, hidden1, hidden2, ..., output]
+    
+    Returns:
+        parameters: dictionary containing W1, b1, W2, b2, ...
+    """
+    parameters = {}
+    L = len(layer_dims)
+    
+    for l in range(1, L):
+        parameters[f'W{l}'] = np.random.randn(layer_dims[l-1], layer_dims[l]) * 0.01
+        parameters[f'b{l}'] = np.zeros((1, layer_dims[l]))
+    
+    return parameters
+
+
+def forward_propagation(X, parameters):
+    """
+    Forward pass through the network.
+    
+    Returns:
+        cache: dictionary containing Z and A for each layer
+        A_final: final output
+    """
+    cache = {}
+    A = X
+    L = len(parameters) // 2
+    
+    # Hidden layers with ReLU
+    for l in range(1, L):
+        Z = A @ parameters[f'W{l}'] + parameters[f'b{l}']
+        A = relu(Z)
+        cache[f'Z{l}'] = Z
+        cache[f'A{l}'] = A
+    
+    # Output layer with identity (for regression)
+    Z_out = A @ parameters[f'W{L}'] + parameters[f'b{L}']
+    A_out = identity(Z_out)
+    cache[f'Z{L}'] = Z_out
+    cache[f'A{L}'] = A_out
+    
+    return cache, A_out
+
+
+def backward_propagation(X, y, parameters, cache):
+    """
+    Backward pass to compute gradients.
+    
+    Returns:
+        grads: dictionary containing gradients dW1, db1, dW2, db2, ...
+    """
+    grads = {}
+    m = X.shape[0]
+    L = len(parameters) // 2
+    
+    # Output layer gradient
+    A_out = cache[f'A{L}']
+    dZ = A_out - y.reshape(-1, 1)
+    
+    # Backpropagate through layers
+    for l in range(L, 0, -1):
+        if l == 1:
+            A_prev = X
+        else:
+            A_prev = cache[f'A{l-1}']
+        
+        grads[f'dW{l}'] = (1/m) * A_prev.T @ dZ
+        grads[f'db{l}'] = (1/m) * np.sum(dZ, axis=0, keepdims=True)
+        
+        if l > 1:
+            dA_prev = dZ @ parameters[f'W{l}'].T
+            dZ = dA_prev * relu_derivative(cache[f'Z{l-1}'])
+    
+    return grads
+
+
+def update_parameters(parameters, grads, learning_rate):
+    """Update parameters using gradient descent"""
+    L = len(parameters) // 2
+    
+    for l in range(1, L + 1):
+        parameters[f'W{l}'] -= learning_rate * grads[f'dW{l}']
+        parameters[f'b{l}'] -= learning_rate * grads[f'db{l}']
+    
+    return parameters
+
+
+def compute_cost(y_true, y_pred):
+    """Compute MSE loss"""
+    m = len(y_true)
+    cost = (1/(2*m)) * np.sum((y_pred.flatten() - y_true) ** 2)
+    return cost
+
+# -----------------------------
+# Model Training
+# -----------------------------
+
+def train_neural_network(X, y, layer_dims, learning_rate=0.01, epochs=1000, verbose=True):
+    """
+    Train neural network using gradient descent.
+    
+    Args:
+        X: training features
+        y: training target
+        layer_dims: list of layer sizes
+        learning_rate: learning rate
+        epochs: number of training iterations
+        verbose: print progress
+    
+    Returns:
+        parameters: trained parameters
+        costs: list of costs during training
+    """
+    parameters = initialize_parameters(layer_dims)
+    costs = []
+    
+    for epoch in range(epochs):
+        # Forward pass
+        cache, A_out = forward_propagation(X, parameters)
+        
+        # Compute cost
+        cost = compute_cost(y, A_out)
+        costs.append(cost)
+        
+        # Backward pass
+        grads = backward_propagation(X, y, parameters, cache)
+        
+        # Update parameters
+        parameters = update_parameters(parameters, grads, learning_rate)
+        
+        # Print progress
+        if verbose and epoch % 100 == 0:
+            print(f"Epoch {epoch}: Cost = {cost:.2f}")
+    
+    return parameters, costs
+
+
+def predict_neural_network(X, parameters):
+    """Make predictions using trained network"""
+    cache, A_out = forward_propagation(X, parameters)
+    return A_out.flatten()
+
+# -----------------------------
 # Hyperparameter Tuning
-# ============================================================================
+# -----------------------------
 
-def tune_hyperparameters(X_trn: pd.DataFrame, 
-                         y_trn: pd.Series,
-                         X_vld: pd.DataFrame,
-                         y_vld: pd.Series) -> Tuple[tuple, float]:
-    """Find best neural network architecture and learning rate"""
-    print("\nHyperparameter tuning:")
+def tune_architecture(X_train, y_train, X_val, y_val, learning_rate=0.01):
+    """
+    Find best network architecture.
+    """
+    print("\nTuning network architecture:")
     print("-" * 60)
     
+    input_dim = X_train.shape[1]
     architectures = [
-        (64,),
-        (100,),
-        (100, 50),
-        (128, 64),
-        (100, 50, 25)
+        [input_dim, 64, 1],
+        [input_dim, 100, 1],
+        [input_dim, 128, 1],
+        [input_dim, 100, 50, 1],
+        [input_dim, 128, 64, 1]
     ]
     
-    learning_rates = [0.001, 0.01]
-    
     best_score = float('inf')
-    best_params = {}
+    best_arch = None
     results = []
     
     for arch in architectures:
-        for lr in learning_rates:
-            model = MLPRegressor(
-                hidden_layer_sizes=arch,
-                activation='relu',
-                solver='adam',
-                learning_rate_init=lr,
-                max_iter=500,
-                random_state=42,
-                early_stopping=True,
-                validation_fraction=0.1,
-                n_iter_no_change=20,
-                verbose=False
-            )
-            
-            model.fit(X_trn, y_trn)
-            y_vld_pred = model.predict(X_vld)
-            val_rmse = np.sqrt(mean_squared_error(y_vld, y_vld_pred))
-            
-            arch_str = ' → '.join(map(str, arch))
-            results.append({
-                'architecture': arch_str,
-                'learning_rate': lr,
-                'val_rmse': val_rmse,
-                'n_iterations': model.n_iter_
-            })
-            
-            print(f"  Architecture: {arch_str:20s} | LR: {lr:.4f} | "
-                  f"Val RMSE: ${val_rmse:,.2f} | Iters: {model.n_iter_}")
-            
-            if val_rmse < best_score:
-                best_score = val_rmse
-                best_params = {
-                    'hidden_layer_sizes': arch,
-                    'learning_rate': lr
-                }
+        arch_str = ' -> '.join(map(str, arch))
+        
+        # Train model
+        params, costs = train_neural_network(
+            X_train, y_train, arch, learning_rate, epochs=500, verbose=False
+        )
+        
+        # Evaluate on validation set
+        y_val_pred = predict_neural_network(X_val, params)
+        val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
+        
+        results.append({
+            'architecture': arch_str,
+            'val_rmse': val_rmse
+        })
+        
+        print(f"{arch_str:30s} -> Val RMSE: ${val_rmse:,.2f}")
+        
+        if val_rmse < best_score:
+            best_score = val_rmse
+            best_arch = arch
     
     print("-" * 60)
-    arch_str = ' → '.join(map(str, best_params['hidden_layer_sizes']))
-    print(f"Best architecture: {arch_str}")
-    print(f"Best learning rate: {best_params['learning_rate']}")
-    print(f"Best validation RMSE: ${best_score:,.2f}")
+    best_arch_str = ' -> '.join(map(str, best_arch))
+    print(f"Best architecture: {best_arch_str}")
+    print(f"Best Val RMSE: ${best_score:,.2f}")
     
-    # Save tuning results
+    # Save results
     pd.DataFrame(results).to_csv('neural_network_tuning.csv', index=False)
     
-    return best_params['hidden_layer_sizes'], best_params['learning_rate']
+    return best_arch
 
-# ============================================================================
-# Model Training and Evaluation
-# ============================================================================
+# -----------------------------
+# Evaluation
+# -----------------------------
 
-def train_model(X_trn: pd.DataFrame, 
-                y_trn: pd.Series,
-                hidden_layers: tuple,
-                learning_rate: float) -> MLPRegressor:
-    """Train Neural Network model"""
-    arch_str = ' → '.join(map(str, hidden_layers))
-    print(f"\nTraining Neural Network:")
-    print(f"  Architecture: {X_trn.shape[1]} → {arch_str} → 1")
-    print(f"  Activation: ReLU")
-    print(f"  Optimizer: Adam")
-    print(f"  Learning rate: {learning_rate}")
-    
-    model = MLPRegressor(
-        hidden_layer_sizes=hidden_layers,
-        activation='relu',
-        solver='adam',
-        learning_rate_init=learning_rate,
-        max_iter=500,
-        random_state=42,
-        early_stopping=True,
-        validation_fraction=0.1,
-        n_iter_no_change=20,
-        verbose=False
-    )
-    
-    model.fit(X_trn, y_trn)
-    
-    print(f"  Training completed in {model.n_iter_} iterations")
-    print(f"  Early stopping: {model.t_}")
-    
-    return model
-
-def evaluate_model(model: MLPRegressor, 
-                   X: pd.DataFrame, 
-                   y: pd.Series, 
-                   dataset_name: str) -> dict:
-    """Evaluate model performance"""
-    y_pred = model.predict(X)
-    
-    rmse = np.sqrt(mean_squared_error(y, y_pred))
-    mae = mean_absolute_error(y, y_pred)
-    r2 = r2_score(y, y_pred)
-    
-    print(f"\n{dataset_name} Metrics:")
-    print(f"  RMSE: ${rmse:,.2f}")
-    print(f"  MAE:  ${mae:,.2f}")
-    print(f"  R²:   {r2:.4f}")
+def evaluate_model(y_true, y_pred):
+    """Calculate evaluation metrics"""
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+    mae = np.mean(np.abs(y_true - y_pred))
     
     return {
+        'mse': mse,
         'rmse': rmse,
-        'mae': mae,
         'r2': r2,
-        'predictions': y_pred
+        'mae': mae
     }
 
-# ============================================================================
+# -----------------------------
 # Visualization
-# ============================================================================
+# -----------------------------
 
-def plot_results(y_true: pd.Series, 
-                 y_pred: np.ndarray,
-                 model: MLPRegressor,
-                 save_path: str = 'neural_network_results.png'):
-    """Create visualization of model performance"""
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+def plot_results(y_true, y_pred, costs):
+    """Plot predictions and training curve"""
+    plt.figure(figsize=(15, 5))
     
     # Actual vs Predicted
-    axes[0].scatter(y_true, y_pred, alpha=0.5, edgecolors='k', linewidth=0.5)
-    axes[0].plot([y_true.min(), y_true.max()], 
-                 [y_true.min(), y_true.max()], 
-                 'r--', lw=2, label='Perfect Prediction')
-    axes[0].set_xlabel('Actual Price ($)', fontsize=12)
-    axes[0].set_ylabel('Predicted Price ($)', fontsize=12)
-    axes[0].set_title('Neural Network: Actual vs Predicted', 
-                     fontsize=13, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    plt.subplot(1, 3, 1)
+    plt.scatter(y_true, y_pred, alpha=0.5)
+    plt.plot([y_true.min(), y_true.max()], 
+             [y_true.min(), y_true.max()], 
+             'r--', lw=2)
+    plt.xlabel('Actual Price')
+    plt.ylabel('Predicted Price')
+    plt.title('Neural Network: Actual vs Predicted')
+    plt.grid(True)
     
     # Residuals
     residuals = y_true - y_pred
-    axes[1].scatter(y_pred, residuals, alpha=0.5, edgecolors='k', linewidth=0.5)
-    axes[1].axhline(y=0, color='r', linestyle='--', lw=2)
-    axes[1].set_xlabel('Predicted Price ($)', fontsize=12)
-    axes[1].set_ylabel('Residuals ($)', fontsize=12)
-    axes[1].set_title('Residual Plot', fontsize=13, fontweight='bold')
-    axes[1].grid(True, alpha=0.3)
+    plt.subplot(1, 3, 2)
+    plt.scatter(y_pred, residuals, alpha=0.5)
+    plt.axhline(y=0, color='r', linestyle='--', lw=2)
+    plt.xlabel('Predicted Price')
+    plt.ylabel('Residuals')
+    plt.title('Residual Plot')
+    plt.grid(True)
     
-    # Loss curve
-    if hasattr(model, 'loss_curve_'):
-        axes[2].plot(model.loss_curve_, linewidth=2)
-        axes[2].set_xlabel('Iteration', fontsize=12)
-        axes[2].set_ylabel('Loss', fontsize=12)
-        axes[2].set_title('Training Loss Curve', fontsize=13, fontweight='bold')
-        axes[2].grid(True, alpha=0.3)
-    else:
-        axes[2].text(0.5, 0.5, 'Loss curve not available', 
-                    ha='center', va='center', fontsize=12)
-        axes[2].axis('off')
+    # Training curve
+    plt.subplot(1, 3, 3)
+    plt.plot(costs)
+    plt.xlabel('Epoch')
+    plt.ylabel('Cost (MSE)')
+    plt.title('Training Loss Curve')
+    plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"\nVisualization saved: {save_path}")
+    plt.savefig('neural_network_results.png', dpi=300)
+    print("Plot saved: neural_network_results.png")
     plt.show()
 
-def save_metrics(train_metrics: dict, 
-                 val_metrics: dict, 
-                 test_metrics: dict,
-                 hidden_layers: tuple,
-                 learning_rate: float,
-                 n_iterations: int,
-                 filepath: str = 'neural_network_metrics.csv'):
-    """Save metrics to CSV file"""
-    metrics_df = pd.DataFrame({
-        'hidden_layers': [str(hidden_layers)],
-        'learning_rate': [learning_rate],
-        'n_iterations': [n_iterations],
-        'train_rmse': [train_metrics['rmse']],
-        'train_mae': [train_metrics['mae']],
-        'train_r2': [train_metrics['r2']],
-        'val_rmse': [val_metrics['rmse']],
-        'val_mae': [val_metrics['mae']],
-        'val_r2': [val_metrics['r2']],
-        'test_rmse': [test_metrics['rmse']],
-        'test_mae': [test_metrics['mae']],
-        'test_r2': [test_metrics['r2']]
-    })
-    
-    metrics_df.to_csv(filepath, index=False)
-    print(f"Metrics saved: {filepath}")
-
-# ============================================================================
+# -----------------------------
 # Main Pipeline
-# ============================================================================
+# -----------------------------
 
 def main():
-    """Main execution pipeline"""
-    print("="*70)
+    print("="*60)
     print("NEURAL NETWORK - HOUSE PRICE PREDICTION")
-    print("="*70)
+    print("="*60)
     
-    # Load and preprocess
-    print("\n[1/7] Loading and preprocessing data...")
+    # Load data
+    print("\n[Step 1] Loading data...")
     df = load_data('train.csv')
-    df_clean = preprocess_data(df)
     
-    # Split features and labels
-    print("\n[2/7] Splitting features and labels...")
-    X, y = feature_label_split(df_clean)
+    # Preprocess
+    print("\n[Step 2] Preprocessing...")
+    X, y = preprocess_data(df)
     
     # Split data
-    print("\n[3/7] Splitting into train/validation/test sets...")
-    X_trn, y_trn, X_vld, y_vld, X_tst, y_tst = train_valid_test_split(X, y)
-    
-    # Apply scaling
-    print("\n[4/7] Applying standardization...")
-    X_trn_scaled, X_vld_scaled, X_tst_scaled = apply_feature_pipeline(
-        X_trn, X_vld, X_tst
+    print("\n[Step 3] Splitting data...")
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=0.2, random_state=42
     )
     
-    # Hyperparameter tuning
-    print("\n[5/7] Tuning hyperparameters...")
-    best_arch, best_lr = tune_hyperparameters(
-        X_trn_scaled, y_trn, X_vld_scaled, y_vld
+    print(f"Training samples: {len(X_train)}")
+    print(f"Validation samples: {len(X_val)}")
+    print(f"Test samples: {len(X_test)}")
+    
+    # Scale features
+    print("\n[Step 4] Scaling features...")
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Normalize target (helps with training stability)
+    y_mean = y_train.mean()
+    y_std = y_train.std()
+    y_train_norm = (y_train - y_mean) / y_std
+    y_val_norm = (y_val - y_mean) / y_std
+    y_test_norm = (y_test - y_mean) / y_std
+    
+    print("Target normalized for training stability")
+    
+    # Tune architecture
+    print("\n[Step 5] Tuning architecture...")
+    best_arch = tune_architecture(
+        X_train_scaled, y_train_norm.values,
+        X_val_scaled, y_val_norm.values,
+        learning_rate=0.01
     )
     
     # Train final model
-    print("\n[6/7] Training final model...")
-    model = train_model(X_trn_scaled, y_trn, best_arch, best_lr)
+    print(f"\n[Step 6] Training final model...")
+    arch_str = ' -> '.join(map(str, best_arch))
+    print(f"Architecture: {arch_str}")
+    
+    parameters, costs = train_neural_network(
+        X_train_scaled, y_train_norm.values,
+        best_arch, learning_rate=0.01, epochs=1000, verbose=True
+    )
+    
+    # Make predictions
+    print("\n[Step 7] Making predictions...")
+    y_train_pred_norm = predict_neural_network(X_train_scaled, parameters)
+    y_test_pred_norm = predict_neural_network(X_test_scaled, parameters)
+    
+    # Denormalize predictions
+    y_train_pred = y_train_pred_norm * y_std + y_mean
+    y_test_pred = y_test_pred_norm * y_std + y_mean
     
     # Evaluate
-    print("\n[7/7] Evaluating model...")
-    train_metrics = evaluate_model(model, X_trn_scaled, y_trn, "Training")
-    val_metrics = evaluate_model(model, X_vld_scaled, y_vld, "Validation")
-    test_metrics = evaluate_model(model, X_tst_scaled, y_tst, "Test")
+    print("\n[Step 8] Evaluating model...")
+    train_metrics = evaluate_model(y_train.values, y_train_pred)
+    test_metrics = evaluate_model(y_test.values, y_test_pred)
     
-    # Save results
-    print("\n" + "="*70)
-    print("SAVING RESULTS")
-    print("="*70)
-    plot_results(y_tst, test_metrics['predictions'], model)
-    save_metrics(train_metrics, val_metrics, test_metrics, 
-                 best_arch, best_lr, model.n_iter_)
+    print("\nTraining Set:")
+    print(f"  RMSE: ${train_metrics['rmse']:,.2f}")
+    print(f"  MAE:  ${train_metrics['mae']:,.2f}")
+    print(f"  R²:   {train_metrics['r2']:.4f}")
     
-    print("\n" + "="*70)
-    print("NEURAL NETWORK COMPLETED SUCCESSFULLY")
-    print("="*70)
+    print("\nTest Set:")
+    print(f"  RMSE: ${test_metrics['rmse']:,.2f}")
+    print(f"  MAE:  ${test_metrics['mae']:,.2f}")
+    print(f"  R²:   {test_metrics['r2']:.4f}")
+    
+    # Visualize
+    print("\n[Step 9] Creating visualizations...")
+    plot_results(y_test.values, y_test_pred, costs)
+    
+    # Save metrics
+    print("\n[Step 10] Saving results...")
+    results_df = pd.DataFrame({
+        'Metric': ['Architecture', 'Learning_Rate', 'Epochs',
+                   'Train_RMSE', 'Test_RMSE', 'Train_R2', 'Test_R2'],
+        'Value': [
+            arch_str,
+            0.01,
+            1000,
+            train_metrics['rmse'],
+            test_metrics['rmse'],
+            train_metrics['r2'],
+            test_metrics['r2']
+        ]
+    })
+    results_df.to_csv('neural_network_metrics.csv', index=False)
+    print("Metrics saved: neural_network_metrics.csv")
+    
+    print("\n" + "="*60)
+    print("NEURAL NETWORK COMPLETED")
+    print("="*60)
+
 
 if __name__ == "__main__":
     main()

@@ -1,153 +1,149 @@
 """
-Polynomial Regression Model for House Price Prediction
+Polynomial Regression - House Price Prediction
 Capstone Project - Classical ML Algorithm #2
+
+Manual polynomial feature expansion with Ridge regularization.
 """
 
 import os
-from typing import Tuple
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import Ridge
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestRegressor
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.linear_model import Ridge
+
+# Set random seed
 np.random.seed(42)
 
-# ============================================================================
-# Custom Transformers
-# ============================================================================
+# -----------------------------
+# Data Loading
+# -----------------------------
 
-class Standardization(BaseEstimator, TransformerMixin):
-    """Standardize features by removing mean and scaling to unit variance"""
-    def __init__(self):
-        self.mean = None
-        self.std = None
-
-    def fit(self, X: pd.DataFrame, y=None):
-        self.mean = np.mean(X, axis=0)
-        self.std = np.std(X, axis=0)
-        return self
-
-    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        return (X - self.mean) / self.std
-
-class AddBias(BaseEstimator, TransformerMixin):
-    """Add bias term (column of 1s) to feature matrix"""
-    def __init__(self):
-        pass
-
-    def fit(self, X: pd.DataFrame, y=None):
-        return self
-
-    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        X = X.copy()
-        X.insert(0, 'bias', 1)
-        return X
-
-# ============================================================================
-# Data Preprocessing
-# ============================================================================
-
-def load_data(filepath='train.csv') -> pd.DataFrame:
+def load_data(filepath='train.csv'):
     """Load the Ames Housing dataset"""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset not found at {filepath}")
     
     df = pd.read_csv(filepath)
-    print(f"Dataset loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+    print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
     return df
 
-def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean and prepare data before splitting"""
+
+def preprocess_data(df):
+    """Clean and prepare data"""
     df = df.copy()
     
-    target = df['SalePrice']
-    features = df.drop(['SalePrice', 'Id'], axis=1, errors='ignore')
+    # Drop ID column
+    df = df.drop('Id', axis=1, errors='ignore')
     
-    # Handle missing values
-    cat_features = features.select_dtypes(include=['object']).columns
-    for col in cat_features:
-        features[col] = features[col].fillna('None')
-    
-    num_features = features.select_dtypes(include=[np.number]).columns
-    for col in num_features:
-        features[col] = features[col].fillna(features[col].median())
-    
-    # One-hot encode categorical variables
-    features_encoded = pd.get_dummies(features, drop_first=True)
-    
-    df_clean = features_encoded.copy()
-    df_clean['SalePrice'] = target
-    
-    print(f"After preprocessing: {df_clean.shape[0]} rows × {df_clean.shape[1]} columns")
-    
-    return df_clean
-
-def feature_label_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
-    """Split features and labels"""
-    X = df.drop(columns=['SalePrice'])
+    # Separate target
     y = df['SalePrice'].copy()
+    X = df.drop('SalePrice', axis=1)
+    
+    # Handle missing values - numerical
+    num_cols = X.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        if X[col].isnull().sum() > 0:
+            X[col].fillna(X[col].median(), inplace=True)
+    
+    # Handle missing values - categorical
+    cat_cols = X.select_dtypes(include=['object']).columns
+    for col in cat_cols:
+        if X[col].isnull().sum() > 0:
+            X[col].fillna('None', inplace=True)
+    
+    # One-hot encoding
+    X = pd.get_dummies(X, drop_first=True)
+    
+    print(f"After preprocessing: {X.shape[1]} features")
+    
     return X, y
 
-def select_important_features(X: pd.DataFrame, y: pd.Series, n_features: int = 10) -> pd.DataFrame:
-    """Select top features using Random Forest importance to reduce dimensionality"""
-    print(f"\nSelecting top {n_features} features for polynomial expansion...")
-    
-    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    rf.fit(X, y)
-    
-    # Get feature importances
-    importances = pd.DataFrame({
-        'feature': X.columns,
-        'importance': rf.feature_importances_
-    }).sort_values('importance', ascending=False)
-    
-    top_features = importances.head(n_features)['feature'].tolist()
-    
-    print(f"Top {n_features} features selected:")
-    for i, (feat, imp) in enumerate(zip(top_features, importances.head(n_features)['importance']), 1):
-        print(f"  {i:2d}. {feat:30s}: {imp:.4f}")
-    
-    return X[top_features]
+# -----------------------------
+# Feature Engineering
+# -----------------------------
 
-def train_valid_test_split(X: pd.DataFrame, y: pd.Series) -> Tuple:
-    """Split data into train, validation, and test sets"""
-    X_temp, X_tst, y_temp, y_tst = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
+def select_top_features(X_train, y_train, X_test, k=15):
+    """
+    Select top k features based on correlation with target.
+    This reduces dimensionality before polynomial expansion.
+    """
+    # Calculate correlation with target
+    correlations = {}
+    for col in X_train.columns:
+        corr = np.corrcoef(X_train[col], y_train)[0, 1]
+        correlations[col] = abs(corr)
     
-    X_trn, X_vld, y_trn, y_vld = train_test_split(
-        X_temp, y_temp, test_size=0.2, random_state=42
-    )
+    # Sort by correlation
+    top_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)[:k]
+    selected_cols = [feat for feat, _ in top_features]
     
-    # Reset indices
-    for data in [X_trn, y_trn, X_vld, y_vld, X_tst, y_tst]:
-        data.reset_index(inplace=True, drop=True)
+    print(f"\nTop {k} features selected:")
+    for i, (feat, corr) in enumerate(top_features, 1):
+        print(f"  {i}. {feat[:40]}: {corr:.4f}")
     
-    print(f"\nData split:")
-    print(f"  Training:   {X_trn.shape[0]} samples")
-    print(f"  Validation: {X_vld.shape[0]} samples")
-    print(f"  Test:       {X_tst.shape[0]} samples")
-    
-    return X_trn, y_trn, X_vld, y_vld, X_tst, y_tst
+    return X_train[selected_cols], X_test[selected_cols], selected_cols
 
-# ============================================================================
-# Hyperparameter Tuning
-# ============================================================================
 
-def tune_hyperparameters(X_trn: pd.DataFrame, 
-                         y_trn: pd.Series,
-                         X_vld: pd.DataFrame,
-                         y_vld: pd.Series) -> Tuple[int, float]:
-    """Find best polynomial degree and regularization strength"""
+def build_polynomial_features(X, degree):
+    """
+    Manually build polynomial features up to specified degree.
+    For each feature x, create: x, x^2, x^3, ..., x^degree
+    """
+    X_poly = np.ones((X.shape[0], 1))  # bias term
+    
+    # Add original features
+    X_poly = np.hstack([X_poly, X])
+    
+    # Add polynomial terms
+    if degree > 1:
+        for d in range(2, degree + 1):
+            X_poly = np.hstack([X_poly, X ** d])
+    
+    return X_poly
+
+# -----------------------------
+# Model Training
+# -----------------------------
+
+def fit_polynomial_regression(X, y, degree, alpha=1.0):
+    """
+    Fit polynomial regression with Ridge regularization.
+    
+    Args:
+        X: features
+        y: target
+        degree: polynomial degree
+        alpha: regularization strength
+    """
+    # Build polynomial features
+    X_poly = build_polynomial_features(X, degree)
+    
+    print(f"Polynomial features created: {X_poly.shape[1]}")
+    
+    # Fit Ridge regression
+    model = Ridge(alpha=alpha)
+    model.fit(X_poly, y)
+    
+    return model
+
+
+def predict_polynomial(model, X, degree):
+    """Make predictions with polynomial features"""
+    X_poly = build_polynomial_features(X, degree)
+    return model.predict(X_poly)
+
+
+def tune_hyperparameters(X_train, y_train, X_val, y_val):
+    """
+    Find best polynomial degree and regularization parameter.
+    """
     print("\nHyperparameter tuning:")
     print("-" * 60)
     
@@ -160,17 +156,12 @@ def tune_hyperparameters(X_trn: pd.DataFrame,
     
     for degree in degrees:
         for alpha in alphas:
-            # Create pipeline
-            pipeline = Pipeline([
-                ('poly', PolynomialFeatures(degree=degree, include_bias=False)),
-                ('scaler', Standardization()),
-                ('regressor', Ridge(alpha=alpha))
-            ])
+            # Train model
+            model = fit_polynomial_regression(X_train, y_train, degree, alpha)
             
-            # Train and evaluate
-            pipeline.fit(X_trn, y_trn)
-            y_vld_pred = pipeline.predict(X_vld)
-            val_rmse = np.sqrt(mean_squared_error(y_vld, y_vld_pred))
+            # Evaluate on validation set
+            y_val_pred = predict_polynomial(model, X_val, degree)
+            val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
             
             results.append({
                 'degree': degree,
@@ -178,183 +169,174 @@ def tune_hyperparameters(X_trn: pd.DataFrame,
                 'val_rmse': val_rmse
             })
             
-            print(f"  Degree={degree}, Alpha={alpha:6.1f} → Val RMSE: ${val_rmse:,.2f}")
+            print(f"Degree={degree}, Alpha={alpha:6.1f} -> Val RMSE: ${val_rmse:,.2f}")
             
             if val_rmse < best_score:
                 best_score = val_rmse
                 best_params = {'degree': degree, 'alpha': alpha}
     
     print("-" * 60)
-    print(f"Best parameters: Degree={best_params['degree']}, Alpha={best_params['alpha']}")
-    print(f"Best validation RMSE: ${best_score:,.2f}")
+    print(f"Best: Degree={best_params['degree']}, Alpha={best_params['alpha']}")
+    print(f"Best Val RMSE: ${best_score:,.2f}")
     
     # Save tuning results
     pd.DataFrame(results).to_csv('polynomial_regression_tuning.csv', index=False)
     
     return best_params['degree'], best_params['alpha']
 
-# ============================================================================
-# Model Training and Evaluation
-# ============================================================================
+# -----------------------------
+# Evaluation
+# -----------------------------
 
-def train_model(X_trn: pd.DataFrame, 
-                y_trn: pd.Series,
-                degree: int,
-                alpha: float) -> Pipeline:
-    """Train Polynomial Regression model with Ridge regularization"""
-    print(f"\nTraining Polynomial Regression (degree={degree}, alpha={alpha})...")
-    
-    pipeline = Pipeline([
-        ('poly', PolynomialFeatures(degree=degree, include_bias=False)),
-        ('scaler', Standardization()),
-        ('bias', AddBias()),
-        ('regressor', Ridge(alpha=alpha))
-    ])
-    
-    pipeline.fit(X_trn, y_trn)
-    
-    # Get number of polynomial features created
-    n_poly_features = pipeline.named_steps['poly'].n_output_features_
-    print(f"  Polynomial features created: {n_poly_features}")
-    print(f"  Regularization (Ridge): α={alpha}")
-    
-    return pipeline
-
-def evaluate_model(model: Pipeline, 
-                   X: pd.DataFrame, 
-                   y: pd.Series, 
-                   dataset_name: str) -> dict:
-    """Evaluate model performance"""
-    y_pred = model.predict(X)
-    
-    rmse = np.sqrt(mean_squared_error(y, y_pred))
-    mae = mean_absolute_error(y, y_pred)
-    r2 = r2_score(y, y_pred)
-    
-    print(f"\n{dataset_name} Metrics:")
-    print(f"  RMSE: ${rmse:,.2f}")
-    print(f"  MAE:  ${mae:,.2f}")
-    print(f"  R²:   {r2:.4f}")
+def evaluate_model(y_true, y_pred):
+    """Calculate evaluation metrics"""
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+    mae = np.mean(np.abs(y_true - y_pred))
     
     return {
+        'mse': mse,
         'rmse': rmse,
-        'mae': mae,
         'r2': r2,
-        'predictions': y_pred
+        'mae': mae
     }
 
-# ============================================================================
+# -----------------------------
 # Visualization
-# ============================================================================
+# -----------------------------
 
-def plot_results(y_true: pd.Series, 
-                 y_pred: np.ndarray, 
-                 degree: int,
-                 save_path: str = 'polynomial_regression_results.png'):
-    """Create visualization of model performance"""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+def plot_results(y_true, y_pred, degree):
+    """Plot actual vs predicted and residuals"""
+    plt.figure(figsize=(12, 5))
     
     # Actual vs Predicted
-    axes[0].scatter(y_true, y_pred, alpha=0.5, edgecolors='k', linewidth=0.5)
-    axes[0].plot([y_true.min(), y_true.max()], 
-                 [y_true.min(), y_true.max()], 
-                 'r--', lw=2, label='Perfect Prediction')
-    axes[0].set_xlabel('Actual Price ($)', fontsize=12)
-    axes[0].set_ylabel('Predicted Price ($)', fontsize=12)
-    axes[0].set_title(f'Polynomial Regression (Degree={degree}): Actual vs Predicted', 
-                     fontsize=13, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    plt.subplot(1, 2, 1)
+    plt.scatter(y_true, y_pred, alpha=0.5)
+    plt.plot([y_true.min(), y_true.max()], 
+             [y_true.min(), y_true.max()], 
+             'r--', lw=2)
+    plt.xlabel('Actual Price')
+    plt.ylabel('Predicted Price')
+    plt.title(f'Polynomial Regression (Degree {degree})')
+    plt.grid(True)
     
     # Residuals
     residuals = y_true - y_pred
-    axes[1].scatter(y_pred, residuals, alpha=0.5, edgecolors='k', linewidth=0.5)
-    axes[1].axhline(y=0, color='r', linestyle='--', lw=2)
-    axes[1].set_xlabel('Predicted Price ($)', fontsize=12)
-    axes[1].set_ylabel('Residuals ($)', fontsize=12)
-    axes[1].set_title('Residual Plot', fontsize=13, fontweight='bold')
-    axes[1].grid(True, alpha=0.3)
+    plt.subplot(1, 2, 2)
+    plt.scatter(y_pred, residuals, alpha=0.5)
+    plt.axhline(y=0, color='r', linestyle='--', lw=2)
+    plt.xlabel('Predicted Price')
+    plt.ylabel('Residuals')
+    plt.title('Residual Plot')
+    plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"\nVisualization saved: {save_path}")
+    plt.savefig('polynomial_regression_results.png', dpi=300)
+    print("Plot saved: polynomial_regression_results.png")
     plt.show()
 
-def save_metrics(train_metrics: dict, 
-                 val_metrics: dict, 
-                 test_metrics: dict,
-                 degree: int,
-                 alpha: float,
-                 filepath: str = 'polynomial_regression_metrics.csv'):
-    """Save metrics to CSV file"""
-    metrics_df = pd.DataFrame({
-        'degree': [degree],
-        'alpha': [alpha],
-        'train_rmse': [train_metrics['rmse']],
-        'train_mae': [train_metrics['mae']],
-        'train_r2': [train_metrics['r2']],
-        'val_rmse': [val_metrics['rmse']],
-        'val_mae': [val_metrics['mae']],
-        'val_r2': [val_metrics['r2']],
-        'test_rmse': [test_metrics['rmse']],
-        'test_mae': [test_metrics['mae']],
-        'test_r2': [test_metrics['r2']]
-    })
-    
-    metrics_df.to_csv(filepath, index=False)
-    print(f"Metrics saved: {filepath}")
-
-# ============================================================================
+# -----------------------------
 # Main Pipeline
-# ============================================================================
+# -----------------------------
 
 def main():
-    """Main execution pipeline"""
-    print("="*70)
+    print("="*60)
     print("POLYNOMIAL REGRESSION - HOUSE PRICE PREDICTION")
-    print("="*70)
+    print("="*60)
     
-    # Load and preprocess
-    print("\n[1/7] Loading and preprocessing data...")
+    # Load data
+    print("\n[Step 1] Loading data...")
     df = load_data('train.csv')
-    df_clean = preprocess_data(df)
     
-    # Split features and labels
-    print("\n[2/7] Splitting features and labels...")
-    X, y = feature_label_split(df_clean)
-    
-    # Feature selection
-    print("\n[3/7] Selecting important features...")
-    X_selected = select_important_features(X, y, n_features=10)
+    # Preprocess
+    print("\n[Step 2] Preprocessing...")
+    X, y = preprocess_data(df)
     
     # Split data
-    print("\n[4/7] Splitting into train/validation/test sets...")
-    X_trn, y_trn, X_vld, y_vld, X_tst, y_tst = train_valid_test_split(X_selected, y)
+    print("\n[Step 3] Splitting data...")
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=0.2, random_state=42
+    )
+    
+    print(f"Training samples: {len(X_train)}")
+    print(f"Validation samples: {len(X_val)}")
+    print(f"Test samples: {len(X_test)}")
+    
+    # Feature selection
+    print("\n[Step 4] Selecting top features...")
+    X_train_sel, X_val_sel, selected_features = select_top_features(
+        X_train, y_train, X_val, k=15
+    )
+    X_test_sel = X_test[selected_features]
+    
+    # Scale features
+    print("\n[Step 5] Scaling features...")
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_sel)
+    X_val_scaled = scaler.transform(X_val_sel)
+    X_test_scaled = scaler.transform(X_test_sel)
     
     # Hyperparameter tuning
-    print("\n[5/7] Tuning hyperparameters...")
-    best_degree, best_alpha = tune_hyperparameters(X_trn, y_trn, X_vld, y_vld)
+    print("\n[Step 6] Tuning hyperparameters...")
+    best_degree, best_alpha = tune_hyperparameters(
+        X_train_scaled, y_train.values,
+        X_val_scaled, y_val.values
+    )
     
     # Train final model
-    print("\n[6/7] Training final model...")
-    model = train_model(X_trn, y_trn, best_degree, best_alpha)
+    print(f"\n[Step 7] Training final model (degree={best_degree}, alpha={best_alpha})...")
+    model = fit_polynomial_regression(
+        X_train_scaled, y_train.values, best_degree, best_alpha
+    )
+    
+    # Make predictions
+    print("\n[Step 8] Making predictions...")
+    y_train_pred = predict_polynomial(model, X_train_scaled, best_degree)
+    y_test_pred = predict_polynomial(model, X_test_scaled, best_degree)
     
     # Evaluate
-    print("\n[7/7] Evaluating model...")
-    train_metrics = evaluate_model(model, X_trn, y_trn, "Training")
-    val_metrics = evaluate_model(model, X_vld, y_vld, "Validation")
-    test_metrics = evaluate_model(model, X_tst, y_tst, "Test")
+    print("\n[Step 9] Evaluating model...")
+    train_metrics = evaluate_model(y_train.values, y_train_pred)
+    test_metrics = evaluate_model(y_test.values, y_test_pred)
     
-    # Save results
-    print("\n" + "="*70)
-    print("SAVING RESULTS")
-    print("="*70)
-    plot_results(y_tst, test_metrics['predictions'], best_degree)
-    save_metrics(train_metrics, val_metrics, test_metrics, best_degree, best_alpha)
+    print("\nTraining Set:")
+    print(f"  RMSE: ${train_metrics['rmse']:,.2f}")
+    print(f"  MAE:  ${train_metrics['mae']:,.2f}")
+    print(f"  R²:   {train_metrics['r2']:.4f}")
     
-    print("\n" + "="*70)
-    print("POLYNOMIAL REGRESSION COMPLETED SUCCESSFULLY")
-    print("="*70)
+    print("\nTest Set:")
+    print(f"  RMSE: ${test_metrics['rmse']:,.2f}")
+    print(f"  MAE:  ${test_metrics['mae']:,.2f}")
+    print(f"  R²:   {test_metrics['r2']:.4f}")
+    
+    # Visualize
+    print("\n[Step 10] Creating visualizations...")
+    plot_results(y_test.values, y_test_pred, best_degree)
+    
+    # Save metrics
+    print("\n[Step 11] Saving results...")
+    results_df = pd.DataFrame({
+        'Metric': ['Degree', 'Alpha', 'Train_RMSE', 'Test_RMSE', 'Train_R2', 'Test_R2'],
+        'Value': [
+            best_degree,
+            best_alpha,
+            train_metrics['rmse'],
+            test_metrics['rmse'],
+            train_metrics['r2'],
+            test_metrics['r2']
+        ]
+    })
+    results_df.to_csv('polynomial_regression_metrics.csv', index=False)
+    print("Metrics saved: polynomial_regression_metrics.csv")
+    
+    print("\n" + "="*60)
+    print("POLYNOMIAL REGRESSION COMPLETED")
+    print("="*60)
+
 
 if __name__ == "__main__":
     main()
