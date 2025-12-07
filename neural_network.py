@@ -138,7 +138,7 @@ def compute_cost(y_true, y_pred):
 # Model Training
 # -----------------------------
 
-def train_neural_network(X, y, layer_dims, learning_rate=0.01, epochs=1000, verbose=True):
+def train_neural_network(X, y, layer_dims, learning_rate=0.01, epochs=1000, verbose=False):
     parameters = initialize_parameters(layer_dims)
     costs = []
     
@@ -148,9 +148,6 @@ def train_neural_network(X, y, layer_dims, learning_rate=0.01, epochs=1000, verb
         costs.append(cost)
         grads = backward_propagation(X, y, parameters, cache)
         parameters = update_parameters(parameters, grads, learning_rate)
-        
-        if verbose and epoch % 200 == 0:
-            print(f"Epoch {epoch}: Cost = {cost:.2f}")
     
     return parameters, costs
 
@@ -164,8 +161,7 @@ def predict_neural_network(X, parameters):
 # -----------------------------
 
 def tune_architecture(X_train, y_train, X_val, y_val, learning_rate=0.01):
-    print("\nTuning network architecture:")
-    print("-" * 60)
+    print("\nTuning network architecture...")
     
     input_dim = X_train.shape[1]
     architectures = [
@@ -176,29 +172,32 @@ def tune_architecture(X_train, y_train, X_val, y_val, learning_rate=0.01):
         [input_dim, 128, 64, 1]
     ]
     
+    print(f"  Testing architectures: [64], [100], [128], [100,50], [128,64]")
+    
     best_score = float('inf')
     best_arch = None
     results = []
     
     for arch in architectures:
-        arch_str = ' -> '.join(map(str, arch))
         params, costs = train_neural_network(X_train, y_train, arch, learning_rate, epochs=500, verbose=False)
         y_val_pred = predict_neural_network(X_val, params)
         val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
         
+        arch_str = ' -> '.join(map(str, arch))
         results.append({'architecture': arch_str, 'val_rmse': val_rmse})
-        print(f"{arch_str:30s} -> Val RMSE: ${val_rmse:,.2f}")
         
         if val_rmse < best_score:
             best_score = val_rmse
             best_arch = arch
     
-    print("-" * 60)
     best_arch_str = ' -> '.join(map(str, best_arch))
-    print(f"Best architecture: {best_arch_str}")
-    print(f"Best Val RMSE: ${best_score:,.2f}")
+    print(f"\n  Best architecture: {best_arch_str}")
+    print(f"  Best validation RMSE: ${best_score:,.2f}")
+    print("✓ Tuning complete")
     
-    pd.DataFrame(results).to_csv('results/neural network/neural_network_tuning.csv', index=False)
+    os.makedirs('results/neural_network', exist_ok=True)
+    pd.DataFrame(results).to_csv('results/neural_network/neural_network_tuning.csv', index=False)
+    
     return best_arch
 
 # -----------------------------
@@ -244,72 +243,103 @@ def plot_results(y_true, y_pred, costs):
     plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig('results/neural network/neural_network_results.png', dpi=300)
-    plt.show()
+    os.makedirs('results/neural_network', exist_ok=True)
+    plt.savefig('results/neural_network/neural_network_results.png', dpi=300)
+    plt.close()
 
 # -----------------------------
 # Main Pipeline
 # -----------------------------
 
 def main():
-    print("="*60)
+    print("\n" + "="*60)
     print("NEURAL NETWORK - HOUSE PRICE PREDICTION")
     print("="*60)
     
+    # Load data
     df = load_data('data/train.csv')
     print(f"\nDataset: {df.shape[0]} rows, {df.shape[1]} columns")
     
+    # Preprocess
     X, y = preprocess_data(df)
     print(f"Features after preprocessing: {X.shape[1]}")
     
+    # Split
     X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.2, random_state=42)
-    
     print(f"Train/Val/Test split: {len(X_train)}/{len(X_val)}/{len(X_test)}")
     
+    # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
     X_test_scaled = scaler.transform(X_test)
     
+    # Normalize target
     y_mean = y_train.mean()
     y_std = y_train.std()
     y_train_norm = (y_train - y_mean) / y_std
     y_val_norm = (y_val - y_mean) / y_std
     y_test_norm = (y_test - y_mean) / y_std
+    print("Target normalized for training stability")
     
-    best_arch = tune_architecture(X_train_scaled, y_train_norm.values, X_val_scaled, y_val_norm.values, learning_rate=0.01)
+    # Tune architecture
+    best_arch = tune_architecture(
+        X_train_scaled, y_train_norm.values, X_val_scaled, y_val_norm.values, learning_rate=0.01
+    )
     
+    # Train final model
     arch_str = ' -> '.join(map(str, best_arch))
-    print(f"\nTraining final model: {arch_str}")
+    print(f"\nTraining final model ({arch_str})...")
+    print(f"  Epochs: 1000")
+    print(f"  Learning rate: 0.01")
     
-    parameters, costs = train_neural_network(X_train_scaled, y_train_norm.values, best_arch, learning_rate=0.01, epochs=1000, verbose=True)
+    parameters, costs = train_neural_network(
+        X_train_scaled, y_train_norm.values, best_arch, learning_rate=0.01, epochs=1000, verbose=False
+    )
+    print("✓ Training complete")
     
+    # Predictions
     y_train_pred_norm = predict_neural_network(X_train_scaled, parameters)
     y_test_pred_norm = predict_neural_network(X_test_scaled, parameters)
     
+    # Denormalize
     y_train_pred = y_train_pred_norm * y_std + y_mean
     y_test_pred = y_test_pred_norm * y_std + y_mean
     
+    # Evaluate
     train_metrics = evaluate_model(y_train.values, y_train_pred)
     test_metrics = evaluate_model(y_test.values, y_test_pred)
     
     print("\nResults:")
-    print(f"  Train - RMSE: ${train_metrics['rmse']:,.2f}, R²: {train_metrics['r2']:.4f}")
-    print(f"  Test  - RMSE: ${test_metrics['rmse']:,.2f}, R²: {test_metrics['r2']:.4f}")
+    print(f"  Train - MSE: ${train_metrics['mse']:,.0f}, RMSE: ${train_metrics['rmse']:,.2f}, MAE: ${train_metrics['mae']:,.2f}, R²: {train_metrics['r2']:.4f}")
+    print(f"  Test  - MSE: ${test_metrics['mse']:,.0f}, RMSE: ${test_metrics['rmse']:,.2f}, MAE: ${test_metrics['mae']:,.2f}, R²: {test_metrics['r2']:.4f}")
     
+    # Visualize
+    print("\nGenerating visualizations...")
     plot_results(y_test.values, y_test_pred, costs)
+    print("✓ Plots saved to results/neural_network/")
     
+    # Save metrics
     results_df = pd.DataFrame({
-        'Metric': ['Architecture', 'Learning_Rate', 'Epochs', 'Train_RMSE', 'Test_RMSE', 'Train_R2', 'Test_R2'],
-        'Value': [arch_str, 0.01, 1000, train_metrics['rmse'], test_metrics['rmse'], 
-                  train_metrics['r2'], test_metrics['r2']]
+        'Metric': ['Architecture', 'Learning_Rate', 'Epochs', 
+                   'Train_MSE', 'Train_RMSE', 'Train_MAE', 
+                   'Test_MSE', 'Test_RMSE', 'Test_MAE', 
+                   'Train_R2', 'Test_R2'],
+        'Value': [
+            arch_str, 0.01, 1000,
+            train_metrics['mse'], train_metrics['rmse'], train_metrics['mae'],
+            test_metrics['mse'], test_metrics['rmse'], test_metrics['mae'],
+            train_metrics['r2'], test_metrics['r2']
+        ]
     })
-    results_df.to_csv('results/neural network/neural_network_metrics.csv', index=False)
+    os.makedirs('results/neural_network', exist_ok=True)
+    results_df.to_csv('results/neural_network/neural_network_metrics.csv', index=False)
+    print("✓ Metrics saved to results/neural_network/neural_network_metrics.csv")
     
     print("\n" + "="*60)
     print("COMPLETED")
-    print("="*60)
+    print("="*60 + "\n")
 
 
 if __name__ == "__main__":

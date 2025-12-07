@@ -48,12 +48,7 @@ def preprocess_data(df):
 # -----------------------------
 
 def tune_hyperparameters(X_train, y_train):
-    """
-    Grid search for optimal XGBoost hyperparameters
-    Based on paper methodology
-    """
-    print("\nHyperparameter tuning (GridSearchCV):")
-    print("-" * 60)
+    print("\nHyperparameter tuning (GridSearchCV)...")
     
     param_grid = {
         'max_depth': [3, 5, 7],
@@ -63,6 +58,16 @@ def tune_hyperparameters(X_train, y_train):
         'colsample_bytree': [0.8],
         'min_child_weight': [1, 3, 5]
     }
+    
+    total_combinations = np.prod([len(v) for v in param_grid.values()])
+    print(f"  Testing {total_combinations} combinations (5-fold CV)")
+    print("  Search space:")
+    print("    • max_depth: [3, 5, 7]")
+    print("    • learning_rate: [0.01, 0.05, 0.1]")
+    print("    • n_estimators: [100, 500, 1000]")
+    print("    • min_child_weight: [1, 3, 5]")
+    print("    • subsample: [0.8]")
+    print("    • colsample_bytree: [0.8]")
     
     xgb = XGBRegressor(
         objective='reg:squarederror',
@@ -75,25 +80,28 @@ def tune_hyperparameters(X_train, y_train):
         param_grid=param_grid,
         cv=5,
         scoring='neg_mean_squared_error',
-        verbose=1,
+        verbose=0,  # Silent mode
         n_jobs=-1
     )
     
-    print(f"Testing {np.prod([len(v) for v in param_grid.values()])} combinations...")
+    print("\n  Training in progress...")
     grid_search.fit(X_train, y_train)
     
-    print("\nBest parameters found:")
+    print("\n  Best parameters:")
     for param, value in grid_search.best_params_.items():
-        print(f"  {param:20s}: {value}")
+        print(f"    {param}: {value}")
     
     best_score = np.sqrt(-grid_search.best_score_)
-    print(f"\nBest CV RMSE: ${best_score:,.2f}")
+    print(f"    Best CV RMSE: ${best_score:,.2f}")
+    print("✓ Tuning complete")
     
+    # Save top 10 results
     results_df = pd.DataFrame(grid_search.cv_results_)
     results_df['mean_rmse'] = np.sqrt(-results_df['mean_test_score'])
     results_df = results_df.sort_values('mean_rmse')
     top_10 = results_df[['params', 'mean_rmse']].head(10)
-    top_10.to_csv('results/xgboost paper/xgboost_paper_tuning.csv', index=False)
+    os.makedirs('results/xgboost_paper', exist_ok=True)
+    top_10.to_csv('results/xgboost_paper/xgboost_paper_tuning.csv', index=False)
     
     return grid_search.best_params_
 
@@ -102,10 +110,7 @@ def tune_hyperparameters(X_train, y_train):
 # -----------------------------
 
 def train_xgboost(X_train, y_train, best_params):
-    """
-    Train XGBoost with optimal parameters
-    """
-    print(f"\nTraining XGBoost with best parameters...")
+    print(f"\nTraining XGBoost with optimal parameters...")
     
     model = XGBRegressor(
         **best_params,
@@ -115,14 +120,11 @@ def train_xgboost(X_train, y_train, best_params):
     )
     
     model.fit(X_train, y_train)
+    print("✓ Training complete")
     return model
 
 
-def analyze_feature_importance(model, feature_names, top_n=15):
-    """
-    Extract and visualize feature importance
-    Key contribution of the paper
-    """
+def analyze_feature_importance(model, feature_names, top_n=10):
     print("\n" + "="*60)
     print("FEATURE IMPORTANCE ANALYSIS")
     print("="*60)
@@ -135,20 +137,23 @@ def analyze_feature_importance(model, feature_names, top_n=15):
     
     print(f"\nTop {top_n} most important features:")
     for i, (feat, imp) in enumerate(feature_importance_df.head(top_n).values, 1):
-        print(f"{i:2d}. {feat:40s}: {imp:.4f}")
+        feat_short = feat[:35] + "..." if len(feat) > 35 else feat
+        print(f"  {i:2d}. {feat_short:40s} {imp:.4f}")
+    print(f"(Full list of {len(feature_names)} features saved to CSV)")
     
-    feature_importance_df.to_csv('results/xgboost paper/xgboost_paper_feature_importance.csv', index=False)
+    os.makedirs('results/xgboost_paper', exist_ok=True)
+    feature_importance_df.to_csv('results/xgboost_paper/xgboost_paper_feature_importance.csv', index=False)
     
     # Plot
     plt.figure(figsize=(10, 8))
-    top_features = feature_importance_df.head(top_n)
+    top_features = feature_importance_df.head(15)
     plt.barh(range(len(top_features)), top_features['importance'], color='steelblue')
     plt.yticks(range(len(top_features)), top_features['feature'])
     plt.xlabel('Importance Score', fontsize=12)
     plt.title('XGBoost: Top 15 Feature Importances', fontsize=14, fontweight='bold')
     plt.gca().invert_yaxis()
     plt.tight_layout()
-    plt.savefig('results/xgboost paper/xgboost_paper_feature_importance.png', dpi=300)
+    plt.savefig('results/xgboost_paper/xgboost_paper_feature_importance.png', dpi=300)
     plt.close()
     
     return feature_importance_df
@@ -189,68 +194,91 @@ def plot_results(y_true, y_pred):
     plt.grid(True)
     
     plt.tight_layout()
-    plt.savefig('results/xgboost paper/xgboost_paper_results.png', dpi=300)
-    plt.show()
+    os.makedirs('results/xgboost_paper', exist_ok=True)
+    plt.savefig('results/xgboost_paper/xgboost_paper_results.png', dpi=300)
+    plt.close()
 
 # -----------------------------
 # Main Pipeline
 # -----------------------------
 
 def main():
-    print("="*60)
+    print("\n" + "="*60)
     print("XGBOOST (PAPER IMPLEMENTATION)")
     print("Paper: 'An Optimal House Price Prediction Algorithm'")
     print("Phan, T.D. (2024)")
     print("="*60)
     
+    # Load data
     df = load_data('data/train.csv')
     print(f"\nDataset: {df.shape[0]} rows, {df.shape[1]} columns")
     
+    # Preprocess
     X, y = preprocess_data(df)
     print(f"Features after preprocessing: {X.shape[1]}")
     
+    # Split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     print(f"Train/Test split: {len(X_train)}/{len(X_test)}")
     
+    # Scale
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
+    # Tune hyperparameters
     best_params = tune_hyperparameters(X_train_scaled, y_train.values)
     
+    # Train model
     model = train_xgboost(X_train_scaled, y_train.values, best_params)
     
+    # Predictions
     y_train_pred = model.predict(X_train_scaled)
     y_test_pred = model.predict(X_test_scaled)
     
+    # Evaluate
     train_metrics = evaluate_model(y_train.values, y_train_pred)
     test_metrics = evaluate_model(y_test.values, y_test_pred)
     
     print("\nResults:")
-    print(f"  Train - RMSE: ${train_metrics['rmse']:,.2f}, R²: {train_metrics['r2']:.4f}")
-    print(f"  Test  - RMSE: ${test_metrics['rmse']:,.2f}, R²: {test_metrics['r2']:.4f}")
+    print(f"  Train - MSE: ${train_metrics['mse']:,.0f}, RMSE: ${train_metrics['rmse']:,.2f}, MAE: ${train_metrics['mae']:,.2f}, R²: {train_metrics['r2']:.4f}")
+    print(f"  Test  - MSE: ${test_metrics['mse']:,.0f}, RMSE: ${test_metrics['rmse']:,.2f}, MAE: ${test_metrics['mae']:,.2f}, R²: {test_metrics['r2']:.4f}")
     
-    feature_importance_df = analyze_feature_importance(model, X.columns)
+    # Feature importance
+    feature_importance_df = analyze_feature_importance(model, X.columns, top_n=10)
     
+    # Visualize
+    print("\nGenerating visualizations...")
     plot_results(y_test.values, y_test_pred)
+    print("✓ Plots saved to results/xgboost_paper/")
     
+    # Save metrics
     results_df = pd.DataFrame({
         'Metric': ['Method', 'Max_Depth', 'Learning_Rate', 'N_Estimators', 
-                   'Train_RMSE', 'Test_RMSE', 'Train_R2', 'Test_R2'],
-        'Value': ['XGBoost', best_params['max_depth'], best_params['learning_rate'],
-                  best_params['n_estimators'], train_metrics['rmse'], test_metrics['rmse'],
-                  train_metrics['r2'], test_metrics['r2']]
+                   'Train_MSE', 'Train_RMSE', 'Train_MAE',
+                   'Test_MSE', 'Test_RMSE', 'Test_MAE',
+                   'Train_R2', 'Test_R2'],
+        'Value': [
+            'XGBoost', best_params['max_depth'], best_params['learning_rate'], best_params['n_estimators'],
+            train_metrics['mse'], train_metrics['rmse'], train_metrics['mae'],
+            test_metrics['mse'], test_metrics['rmse'], test_metrics['mae'],
+            train_metrics['r2'], test_metrics['r2']
+        ]
     })
-    results_df.to_csv('results/xgboost paper/xgboost_paper_metrics.csv', index=False)
+    os.makedirs('results/xgboost_paper', exist_ok=True)
+    results_df.to_csv('results/xgboost_paper/xgboost_paper_metrics.csv', index=False)
+    print("✓ Metrics saved to results/xgboost_paper/xgboost_paper_metrics.csv")
     
+    # Summary
     print("\n" + "="*60)
     print("KEY FINDINGS (per paper):")
-    print(f"  - Best Test RMSE: ${test_metrics['rmse']:,.2f}")
-    print(f"  - Best Test R²: {test_metrics['r2']:.4f}")
-    print(f"  - Top 3 features: {', '.join(feature_importance_df.head(3)['feature'].tolist())}")
+    print(f"  • Best Test RMSE: ${test_metrics['rmse']:,.2f}")
+    print(f"  • Best Test R²: {test_metrics['r2']:.4f}")
+    top_3 = ', '.join(feature_importance_df.head(3)['feature'].tolist())
+    print(f"  • Top 3 features: {top_3}")
     print("="*60)
     print("COMPLETED")
-    print("="*60)
+    print("="*60 + "\n")
 
 
 if __name__ == "__main__":
