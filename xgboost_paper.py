@@ -93,7 +93,7 @@ def tune_hyperparameters(X_train, y_train):
     results_df['mean_rmse'] = np.sqrt(-results_df['mean_test_score'])
     results_df = results_df.sort_values('mean_rmse')
     top_10 = results_df[['params', 'mean_rmse']].head(10)
-    top_10.to_csv('results/xgboost_paper_tuning.csv', index=False)
+    top_10.to_csv('results/xgboost paper/xgboost_paper_tuning.csv', index=False)
     
     return grid_search.best_params_
 
@@ -137,7 +137,7 @@ def analyze_feature_importance(model, feature_names, top_n=15):
     for i, (feat, imp) in enumerate(feature_importance_df.head(top_n).values, 1):
         print(f"{i:2d}. {feat:40s}: {imp:.4f}")
     
-    feature_importance_df.to_csv('results/xgboost_paper_feature_importance.csv', index=False)
+    feature_importance_df.to_csv('results/xgboost paper/xgboost_paper_feature_importance.csv', index=False)
     
     # Plot
     plt.figure(figsize=(10, 8))
