@@ -23,7 +23,7 @@ IntroMLCapstone/
 ├── xgboost_paper.py                 # Paper #1: XGBoost (Phan, 2024)
 ├── stacking_paper.py                # Paper #2: Stacking (Truong et al., 2020)
 │
-├── capstone_report.pdf              # Final technical report
+├── House_Price_Prediction.pdf       # Final technical report
 └── README.md                        # This file
 ```
 
